@@ -11,7 +11,8 @@ body{margin:0;background:var(--bg);color:var(--tx);font:13px system-ui,sans-seri
 #bar{display:flex;flex-wrap:wrap;gap:8px;padding:8px;align-items:end}
 label{display:flex;flex-direction:column;gap:2px;color:var(--mut);font-size:11px}
 input{width:64px;background:var(--panel);color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px;font-size:14px}
-#sym{width:104px}
+#sym{width:112px;background:var(--panel);color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:6px;font-size:14px}
+.s small{display:block;color:var(--mut);font-size:10px;margin-top:1px}
 button{background:var(--buy);color:#04140d;border:0;border-radius:6px;padding:9px 14px;font-weight:700;font-size:14px}
 button:disabled{opacity:.5}
 #stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:0 8px 8px}
@@ -27,8 +28,7 @@ canvas{width:100%;height:56vh;display:block;background:#05070a}
 <body>
 <div id="bar">
   <button id="go">Boshlash</button>
-  <label>Instrument<input id="sym" list="sl" value="XAUUSDT"></label>
-  <datalist id="sl"><option value="XAUUSDT"><option value="BTCUSDT"><option value="QQQUSDT"><option value="ETHUSDT"></datalist>
+  <label>Instrument<select id="sym"><option>XAUUSDT</option><option>BTCUSDT</option><option>QQQUSDT</option><option>ETHUSDT</option><option value="custom">Boshqa...</option></select></label>
   <label>Qadam ($)<input id="bin" type="number" step="0.1" value="0.5"></label>
   <label>Qatorlar<input id="rows" type="number" value="60"></label>
   <label>Devor (x)<input id="wall" type="number" step="0.5" value="4"></label>
@@ -43,6 +43,9 @@ canvas{width:100%;height:56vh;display:block;background:#05070a}
   <div class="s">Bid/Ask 20 daraja<b id="im">-</b></div>
   <div class="s">Spred<b id="sp">-</b></div>
   <div class="s">Savdo/10s<b id="tv">-</b></div>
+  <div class="s">Yaqin BID devor<b id="wb">-</b></div>
+  <div class="s">Yaqin ASK devor<b id="wa">-</b></div>
+  <div class="s">Tasdiq<b id="vd">-</b><small id="vt"></small></div>
 </div>
 <canvas id="cv"></canvas>
 <div id="log"></div>
@@ -51,7 +54,7 @@ const PRE={XAUUSDT:{bin:.5,abs:50},BTCUSDT:{bin:10,abs:5},ETHUSDT:{bin:.5,abs:50
 const $=id=>document.getElementById(id);
 let SYM='xauusdt',gen=0,running=false,ws,audio;
 let bids=new Map(),asks=new Map(),lastU=0,buf=[],synced=false,first=true;
-let cols=[],trades=[],colId=0,mid=0,best={bb:0,ba:0},seen={},active={},lastAbs=0;
+let cols=[],trades=[],colId=0,mid=0,best={bb:0,ba:0},seen={},active={},lastAbs=0,lastVd='',lastVdT=0;
 const cfg=()=>({bin:+$('bin').value||0.5,rows:+$('rows').value||60,wall:+$('wall').value||4,abs:+$('abs').value||50,basis:+$('basis').value||0});
 const status=t=>$('st').textContent=t;
 const dec=b=>Math.max(0,Math.ceil(-Math.log10(b)));
@@ -60,7 +63,17 @@ $('go').onclick=()=>{
   try{audio=new(window.AudioContext||window.webkitAudioContext)()}catch(e){}
   running=true;$('go').disabled=true;setSym();
 };
-$('sym').onchange=setSym;
+$('sym').onchange=()=>{
+  const s=$('sym');
+  if(s.value==='custom'){
+    const v=(prompt('Instrument nomi (masalan SOLUSDT):')||'').trim().toUpperCase();
+    if(!v){s.value=SYM.toUpperCase();return}
+    let o=[...s.options].find(x=>x.text===v);
+    if(!o){o=document.createElement('option');o.textContent=v;s.insertBefore(o,s.lastChild)}
+    s.value=v;
+  }
+  setSym();
+};
 function setSym(){
   SYM=($('sym').value||'XAUUSDT').trim().toLowerCase();
   const p=PRE[SYM.toUpperCase()];if(p){$('bin').value=p.bin;$('abs').value=p.abs}
@@ -170,6 +183,27 @@ function tick(){
   $('p1').textContent=mid.toFixed(dc+1);
   $('p2').textContent=(mid+c.basis).toFixed(dc+1);
   $('sp').textContent=(ba-bb).toFixed(dc+2);
+  // yaqin devorlar va tasdiq
+  let wb=null,wa=null;
+  col.m.forEach((o,i)=>{
+    if(o.q>col.avg*c.wall){const pr=(i+.5)*c.bin;
+      if(o.s==='b'&&pr<mid&&(!wb||pr>wb.pr))wb={pr,q:o.q};
+      if(o.s==='a'&&pr>mid&&(!wa||pr<wa.pr))wa={pr,q:o.q};}
+  });
+  $('wb').textContent=wb?'-'+(mid-wb.pr).toFixed(dc+1)+'$ / '+wb.q.toFixed(0):'yo\'q';
+  $('wa').textContent=wa?'+'+(wa.pr-mid).toFixed(dc+1)+'$ / '+wa.q.toFixed(0):'yo\'q';
+  const act=t10.length>3,d10=bv-sv,chg=act?mid-t10[0].p:0,near=c.bin*8,ib=bs/(as||1);
+  const L=[!!wb&&mid-wb.pr<=near,ib>1.25,act&&d10>0,act&&chg>=-c.bin];
+  const S=[!!wa&&wa.pr-mid<=near,ib<0.8,act&&d10<0,act&&chg<=c.bin];
+  const ls=L.filter(Boolean).length,ss=S.filter(Boolean).length;
+  let vd='Kutish',vc='';
+  if(ls>=3&&ls>ss){vd='LONG '+ls+'/4';vc='b'}
+  else if(ss>=3&&ss>ls){vd='SHORT '+ss+'/4';vc='r'}
+  $('vd').textContent=vd;$('vd').className=vc;
+  $('vt').textContent='Long '+ls+' / Short '+ss;
+  if(vc&&vd!==lastVd&&now-lastVdT>30000){lastVdT=now;
+    alertMsg('TASDIQ: '+vd+' @ '+mid.toFixed(dc+1)+brk(mid,c),vc)}
+  lastVd=vd;
   draw();
 }
 
